@@ -1,10 +1,10 @@
 (ns cli.core 
   (:gen-class)
-  (:import [javax.imageio ImageIO] 
-           [java.io File] 
-           [java.awt.image BufferedImage]
-           )
-  (:require [next.jdbc :as jdbc]))
+  (:import [javax.imageio ImageIO]
+           [java.io File]
+           [java.awt.image BufferedImage])
+  (:require [next.jdbc :as jdbc])
+  (:require [next.jdbc.result-set :as rs]))
 
 (def logo "
    #############   #######        #############        #######   #######  #######  ###############   ~##############           #############   #######       #######   
@@ -20,7 +20,6 @@
    #####    #####   #####  ##### !####     ####-  ####  ~####     #####    #####    #####   #####      ####    #####           #####    #####   #####  #####  #####    
    ##############   ############ !#############-  ###########     ##############    #####    #####     #############           ##############   ############  #####    
    #############   #############  #############   ###########     #############    #######   ######~  ##############           #############   ############# #######   
-                                                                                                                                                                    
                                                                                                                                                                     
            ")
 
@@ -46,7 +45,8 @@
 (def lookup-table " .,-~+=!&#@")
 ;; (def lookup-table " .:-=+x*!?#%@")
 ;; (def lookup-table " .:-=+*#%@")
-;; (def lookup-table (clojure.string/reverse "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "))
+(def extended-lookup-table (clojure.string/reverse "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "))
+(def extended-lookup-table " `.-':_,^=;><+!rc*/z?sLTv)J7(|Fi{C}fI31tlu[neoZ5Yxjya]2ESwqkP6h9d4VpOGbUAKXHm8RD#$Bg0MNWQ%&@")
 
 (defn read-image
   [filename]
@@ -80,17 +80,19 @@
 
 ;; Converting the brightness values to ascii characters
 (defn brightness-to-ascii
-  [{:keys [brightness colour-code]}]
-  (let [index (int (* (/ brightness 255) (dec (count lookup-table))))
-        char (get lookup-table index)
-        colour (str "\u001B[38;5;" colour-code "m")]
+  [{:keys [brightness colour-code]} coloured? extended?]
+  (let [index (int (* (/ brightness 255) (dec (count (if extended? extended-lookup-table lookup-table)))))
+        char (get (if extended? extended-lookup-table lookup-table) index)
+        colour (if coloured?
+                 (str "\u001B[38;5;" colour-code "m")
+                 "")]
     (str colour char (:reset ansi-colour))))
 
 ;; Convert the pixel data to ascii characters
 (defn to-ascii
-  [{:keys [width pixels]}]
-  (let [brightness-values (map brightness pixels) 
-        ascii-chars (map brightness-to-ascii brightness-values)]
+  [{:keys [width pixels]} coloured? extended?]
+  (let [brightness-values (pmap brightness pixels) 
+        ascii-chars (pmap #(brightness-to-ascii % coloured? extended?) brightness-values)]
     (partition width ascii-chars)))
 
 ;; Print the ascii characters to the console
@@ -99,12 +101,56 @@
   (doseq [line ascii]
     (println (str (apply str line) (:reset ansi-colour)))))
 
+(defn extract-gif-frames
+  [filename] 
+  (let [file (File. filename)
+        reader (ImageIO/getImageReadersByFormatName "gif")
+        reader (first (iterator-seq reader))]
+  (.setInput reader (ImageIO/createImageInputStream file) false)
+  (let [num-frames (.getNumImages reader true)]
+    (loop [frames [] index 0]
+      (if (< index num-frames)
+        (if-let [frame (.read reader index)]
+            (recur (conj frames frame) (inc index))
+            frames))))))
+
+(defn gif-to-ascii
+  [filename downsample-factor coloured? extended?]
+  (let [frames (extract-gif-frames filename)]
+    (map #(-> %
+              (get-pixel-data downsample-factor)
+              (to-ascii coloured? extended?)) 
+        frames)))
+
+(defn play-gif-ascii
+  [ascii-frames]
+  (doseq [frame ascii-frames]
+    (print-ascii frame)
+    (Thread/sleep 100))
+  (println "Finished"))
+  ;; (println "\u001B[2J" "\u001B[H")))
+
 (defn enter-to-continue
   []
   (println "Press enter to continue...")
   (loop []
     (when (not= (read-line) "")
       (recur))))
+
+(defn ascii-gif
+  []
+  (try
+    (let [filename (do (println "Enter GIF filename:") (read-line))
+          downsample-factor (do (println "Enter a downsample factor (e.g. 4 - meaning 4x smaller):") (Integer/parseInt (read-line)))
+          coloured? (do (println "Do you want the ASCII gif to be coloured? (y/n):") (= "y" (read-line)))
+          extended? (do (println "Do you want to use a larger range of ascii characters? (y/n):") (= "y" (read-line)))]
+      (-> filename
+          (gif-to-ascii downsample-factor coloured? extended?)
+          play-gif-ascii))
+    (catch Exception e
+      (println "Error: Invalid filename or unable to read the gif: " e)))
+  (enter-to-continue)
+  {:menu :main})
 
 ;; First version
 ;; (defn ascii-image
@@ -118,14 +164,17 @@
 ;; Second version to handle input
 (defn ascii-image
   []
-  (println "Enter filename followed by a downsample factor (e.g. 4 - meaning 4x smaller):")
   (try 
-    (let [filename (read-line) 
-          downsample-factor (Integer/parseInt (read-line))] 
+    (let [filename (do (println "Enter filename:") (read-line)) 
+          downsample-factor (do (println "Enter a downsample factor (e.g. 4 - meaning 4x smaller):") (Integer/parseInt (read-line)))
+          coloured? (do (println "Do you want the ASCII image to be coloured? (y/n):")
+                        (= "y" (read-line)))
+                        extended? (do (println "Do you want to use a larger range of ascii characters? (y/n):")
+                        (= "y" (read-line)))] 
       (-> filename 
           read-image 
           (get-pixel-data downsample-factor) 
-          to-ascii 
+          (to-ascii coloured? extended?)
           print-ascii)) 
     (catch Exception e 
       (println "Error: Invalid filename or unable to read the image."))) 
@@ -148,13 +197,19 @@
 (defn mysql-connect
   []
   (println "Please enter the MySQL Connection details:")
-  (let [dbtype (read-line)
-        dbname (read-line)
-        dbuser (read-line)
-        dbpassword (read-line)
-        ds (jdbc/get-datasource {:dbtype dbtype :dbname dbname :dbuser dbuser :dbpassword dbpassword})]
-    (println "Connected to db")
-    (jdbc/execute! ds ["SELECT * from table"])
+  (let [dbtype (do (println "DB Type") (read-line))
+        dbname (do (println "DB Name") (read-line))
+        username (do (println "Username") (read-line))
+        password (do (println "Password") (read-line))
+        ds (jdbc/get-datasource {:dbtype dbtype :dbname dbname :user username :password password})]
+    (if ds
+      (println "Connected to db")
+      (println "Failed to connect to db"))
+    (let [result (jdbc/execute! ds ["SELECT * from intranet_shop_users"] {:builder-fn rs/as-unqualified-lower-maps})]
+      ;; (println "Query result: " (:isu_email (first result))))
+      ;; (map :isu_email result))
+      (doseq [row result]
+      (println "Email: " (:isu_email row))))
     (enter-to-continue)
     {:menu :mysql}))
 
@@ -162,10 +217,10 @@
   {:title "MySQL"
    :options [
             ;;  {:title "Query" :function mysql-query} 
-            {:title "Connect" :function mysql-connect}
-             {:title "Back" :function (fn [] {:menu :main})} 
-             {:title "Exit" :function (fn [] (System/exit 0))}
-             ]})
+            {:title "Connect" :function mysql-connect} 
+            {:title "Back" :function (fn [] {:menu :main})} 
+            {:title "Exit" :function (fn [] (System/exit 0))}
+            ]})
 
 ;; So since this is changing to a proper like command line tool, we need to adjust and have a interface main menu etc.
 ;; Means we need a function that prints out a menu
@@ -177,6 +232,7 @@
 (def main-menu-options 
   {:title "Main Menu" 
    :options [{:title "Convert Image to ASCII" :function ascii-image} 
+             {:title "Convert GIF to ASCII" :function ascii-gif}
              {:title "Print available ANSI Colours" :function print-256-colours} 
              {:title "MySQL" :function (fn [] {:menu :mysql})} 
              {:title "Exit" :function (fn [] (System/exit 0))}
@@ -204,7 +260,7 @@
           (function)) 
         {:menu :main}))
     (catch Exception e
-      (println "Error: Invalid input.")
+      (println "Error: Invalid input." e)
       (enter-to-continue)
       {:menu :main})))
 
