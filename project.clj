@@ -6,6 +6,7 @@
   :dependencies [[org.clojure/clojure "1.11.1"]
                  [com.github.seancorfield/next.jdbc "1.3.994"]
                  [com.mysql/mysql-connector-j "9.1.0"]
+                 [org.bytedeco/javacv-platform "1.5.6"]
                  ]
   :main ^:skip-aot cli.core
   :target-path "target/%s"

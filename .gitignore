@@ -11,3 +11,8 @@ pom.xml.asc
 /.prepl-port
 .hgignore
 .hg/
+resources/*.png
+resources/*.jpg
+resources/*.mp4
+resources/*.gif
+debug-frames/
