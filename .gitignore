@@ -16,3 +16,5 @@ resources/*.jpg
 resources/*.mp4
 resources/*.gif
 debug-frames/
+.clj-kondo/
+.lsp/

@@ -73,7 +73,7 @@
         height (.getHeight image)]
     {:width (int (Math/ceil (/ width downsample-factor)))
      :height (int (Math/ceil (/ height downsample-factor)))
-     :pixels (for [y (range 0 height (* 2 downsample-factor))
+     :pixels (for [y (range 0 height (* 2.5 downsample-factor))
                    x (range 0 width downsample-factor)]
                (.getRGB image x y))}))
 
@@ -110,7 +110,7 @@
 ;; Print the ascii characters to the console
 (defn print-ascii
   [ascii]
-  (print "\u001B[2J")
+  ;; (print "\u001B[2J")
   (let [buffer (StringBuilder.)]
     (doseq [line ascii]
       (.append buffer (str (apply str line) (:reset ansi-colour)))
@@ -174,7 +174,7 @@
                                    (println "Warning: Skipping null buffered image")
                                    (recur frames (inc frame-count)))
                                  (do
-                                   (println "Extracted Frame: " frame-count)
+                                  ;;  (println "Extracted Frame: " frame-count)
                                    (let [cloned-image (clone-buffered-image buffered-image)]
                                     ;;  (save-frame cloned-image frame-count)
                                      (recur (conj frames cloned-image) (inc frame-count)))))))))))]
@@ -188,19 +188,27 @@
       (println "No frames extracted from the MP4.")
       (do
         (println (str "Extracted " (count frames) " frames from the MP4"))
-        (pmap (fn [frame]
-                (-> frame
-                    (get-pixel-data downsample-factor)
-                    (to-ascii coloured? extended?)))
-             frames)))))
+        (doall (pmap (fn [frame]
+                       (-> frame
+                           (get-pixel-data downsample-factor)
+                           (to-ascii coloured? extended?)))
+                     frames))))))
 
 (defn play-gif-ascii
   [ascii-frames]
+  (println "\u001B[2J")
+  (let [frame-delay (/ 1000 30)
+        start-time (System/currentTimeMillis)]
   (doseq [frame ascii-frames]
+  (let [frame-start (System/currentTimeMillis)]
     (println "\u001B[H")
     (print-ascii frame)
-    (Thread/sleep 50))
-  (println "Finished"))
+    (let [procesesing-time (- (System/currentTimeMillis) frame-start)
+          sleep-time (max 0 (- frame-delay processing-time))]
+      (when (pos? sleep-time)
+        (Thread/sleep sleep-time)))))
+    ;; (Thread/sleep 10))
+  (println "Finished")))
   ;; (println "\u001B[2J" "\u001B[H")))
 
 (defn enter-to-continue
@@ -209,18 +217,6 @@
   (loop []
     (when (not= (read-line) "")
       (recur))))
-
-
-
-
-
-
-
-
-
-
-
-
 
 (defn ascii-mp4
   []
@@ -262,6 +258,73 @@
 ;;       print-ascii))
 
 ;; Second version to handle input
+
+(defn detect-edges
+  [image]
+  (let [width (.getWidth image)
+        height (.getHeight image)
+        result (BufferedImage. width height BufferedImage/TYPE_INT_RGB)
+
+        sobel-x (flatten [[-1 0 1] [-2 0 2] [-1 0 1]])
+        sobel-y (flatten [[1 2 1] [0 0 0] [-1 -2 -1]])
+
+        get-grayscale (fn [rgb]
+                        (let [r (bit-and (bit-shift-right rgb 16) 0xFF)
+                              g (bit-and (bit-shift-right rgb 8) 0xFF)
+                              b (bit-and rgb 0xFF)]
+                          (int (/ (+ r g b) 3))))
+        get-rgb (fn [x y]
+                  (if (and (>= x 0) (< x width) (>= y 0) (< y height))
+                    (.getRGB image x y)
+                    0))
+
+        get-neighborhood (fn [x y]
+                           (for [dy (range -1 2)
+                                 dx (range -1 2)]
+                             (get-grayscale (get-rgb (+ x dx) (+ y dy)))))
+        apply-kernel (fn [neighbourhood kernel]
+                       (reduce + (map * kernel neighbourhood)))]
+                       (doseq [y (range height)
+                               x (range width)]
+                         (let [neighbourhood (get-neighborhood x y)
+                               gx (apply-kernel neighbourhood sobel-x)
+                               gy (apply-kernel neighbourhood sobel-y)
+                               magnitude (int (Math/sqrt (+ (* gx gx) (* gy gy))))
+                               normalized (min 255 magnitude)
+                               edge-pixel (+ (* normalized 0x010101))]
+                           (.setRGB result x y edge-pixel)))
+                       result))
+
+(defn enhance-with-edges
+  "More concise implementation of edge enhancement"
+  [image edge-weight]
+  (let [width (.getWidth image)
+        height (.getHeight image)
+        edges (detect-edges image)
+        result (BufferedImage. width height BufferedImage/TYPE_INT_RGB)]
+    
+    (doseq [y (range height)
+            x (range width)]
+      (let [original-rgb (.getRGB image x y)
+            edge-value (bit-and (.getRGB edges x y) 0xFF)
+            
+            ;; Extract RGB components
+            orig-r (bit-and (bit-shift-right original-rgb 16) 0xFF)
+            orig-g (bit-and (bit-shift-right original-rgb 8) 0xFF)
+            orig-b (bit-and original-rgb 0xFF)
+            
+            ;; Calculate enhanced values
+            enhance-channel (fn [channel]
+                              (max 0 (min 255 (- channel (int (* edge-value edge-weight))))))
+            
+            enhanced-rgb (bit-or (bit-shift-left (enhance-channel orig-r) 16)
+                                (bit-shift-left (enhance-channel orig-g) 8)
+                                (enhance-channel orig-b))]
+        
+        (.setRGB result x y enhanced-rgb)))
+    
+    result))
+
 (defn ascii-image
   []
   (try
@@ -270,9 +333,20 @@
           coloured? (do (println "Do you want the ASCII image to be coloured? (y/n):")
                         (= "y" (read-line)))
           extended? (do (println "Do you want to use a larger range of ascii characters? (y/n):")
-                        (= "y" (read-line)))]
-      (-> filename
-          read-image
+                        (= "y" (read-line)))
+          edge-enhance? (do (println "Do you want to enhance edges? (y/n):")
+                            (= "y" (read-line)))
+          edge-weight (if edge-enhance?
+                        (do (println "Enter edge enhancement strength (0.1 - 1.0):")
+                            (Double/parseDouble (read-line)))
+                        0.0) 
+          img (read-image filename)
+          processed-img (if edge-enhance?
+                          (enhance-with-edges img edge-weight)
+                          img)
+          ] 
+      (println "Processing image...")
+      (-> processed-img
           (get-pixel-data downsample-factor)
           (to-ascii coloured? extended?)
           print-ascii))
@@ -305,12 +379,43 @@
     (if ds
       (println "Connected to db")
       (println "Failed to connect to db"))
-    (let [result (jdbc/execute! ds ["SELECT * from intranet_shop_users"] {:builder-fn rs/as-unqualified-lower-maps})]
+    (let [query (do (println "Enter query:") (read-line))
+          result (jdbc/execute! ds [query] {:builder-fn rs/as-unqualified-lower-maps})]
+      (if (empty? result)
+        (println "No results returned from query")
+        (let [column-names (keys (first result))
+              column-count (count column-names)
+              column-widths (reduce (fn [widths row]
+                                      (reduce-kv (fn [w k v]
+                                                   (update w k max (count (str v))))
+                                                 widths
+                                                 row))
+                                    (zipmap column-names (map #(count (str %)) column-names))
+                                    result)]
+          (println "Number of columns:" column-count)
+          (println "Column names:" (pr-str column-names))
+          (println "Column widths:" (pr-str column-widths) "\n\n")
+
+          (doseq [col column-names]
+            (print (format (str "%-" (get column-widths col) "s ") (name col))))
+          (println)
+
+          (doseq [col column-names]
+            (print (str (apply str (repeat (get column-widths col) "-")) " ")))
+          (println)
+
+          (doseq [row result]
+            (doseq [col column-names]
+              (print (format (str "%-" (get column-widths col) "s ") (str (get row col)))))
+            (println)))))
+
       ;; (println "Query result: " (:isu_email (first result))))
       ;; (map :isu_email result))
-      (doseq [row result]
-        (println "Email: " (:isu_email row))))
-    (enter-to-continue)
+      ;; (doseq [row result]
+      ;;   (println "Email: " (:isu_email row))))
+      ;; (println result)
+      ;; (println "map: " (map :isu_email result))
+    (enter-to-continue) 
     {:menu :mysql}))
 
 (def mysql-menu-options
