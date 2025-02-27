@@ -44,6 +44,7 @@
    :bg-cyan "\u001B[46m"})
 
 (def lookup-table " .,-~+=!&#@")
+;; (def block "\u2588")
 ;; (def lookup-table " .:-=+x*!?#%@")
 ;; (def lookup-table " .:-=+*#%@")
 (def extended-lookup-table (clojure.string/reverse "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. "))
@@ -199,17 +200,16 @@
   (println "\u001B[2J")
   (let [frame-delay (/ 1000 30)
         start-time (System/currentTimeMillis)]
-  (doseq [frame ascii-frames]
-  (let [frame-start (System/currentTimeMillis)]
-    (println "\u001B[H")
-    (print-ascii frame)
-    (let [procesesing-time (- (System/currentTimeMillis) frame-start)
-          sleep-time (max 0 (- frame-delay processing-time))]
-      (when (pos? sleep-time)
-        (Thread/sleep sleep-time)))))
-    ;; (Thread/sleep 10))
-  (println "Finished")))
-  ;; (println "\u001B[2J" "\u001B[H")))
+    (doseq [frame ascii-frames]
+      (let [frame-start (System/currentTimeMillis)]
+        (println "\u001B[H")
+        (print-ascii frame)
+        (let [processing-time (- (System/currentTimeMillis) frame-start)
+              sleep-time (max 0 (- frame-delay processing-time))] 
+          (println "\u001B[H FPS: " (double (/ 1000 processing-time)))
+          (when (pos? sleep-time)
+            (Thread/sleep sleep-time)))))
+    (println "Finished")))
 
 (defn enter-to-continue
   []
